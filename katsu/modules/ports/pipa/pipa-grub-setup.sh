@@ -6,6 +6,8 @@ CMDLINE="root=LABEL=um-pipa rw rootwait boot=LABEL=${BOOT_LABEL} console=tty0 qu
 INITRAMFS_STABLE="initramfs-linux-pipa.img"
 
 printf '%s\n' "$CMDLINE" > /etc/cmdline
+mkdir -p /boot
+printf '%s\n' "$CMDLINE" > /boot/cmdline.txt
 
 KERNEL_VER=$(find /usr/lib/modules -mindepth 1 -maxdepth 1 -type d -printf '%f\n' | head -n 1)
 

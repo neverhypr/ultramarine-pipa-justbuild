@@ -24,6 +24,72 @@ first_existing_file() {
     return 1
 }
 
+remove_regular_users() {
+    # GNOME Initial Setup only runs when there are no local users with UID >= 1000.
+    if [ ! -f /etc/passwd ]; then
+        return 0
+    fi
+    while IFS=: read -r _pw_user _ _pw_uid _; do
+        case "$_pw_uid" in
+            ''|*[!0-9]*) continue ;;
+        esac
+        if [ "$_pw_uid" -ge 1000 ] && [ "$_pw_uid" -lt 65534 ]; then
+            echo "Removing pre-created user '$_pw_user' (uid $_pw_uid) so GNOME initial setup can run..."
+            userdel -r "$_pw_user" 2>/dev/null || userdel "$_pw_user" 2>/dev/null || true
+        fi
+    done < /etc/passwd
+}
+
+enable_gnome_initial_setup() {
+    remove_regular_users
+
+    install -d /var/lib/AccountsService/users
+    cat > /var/lib/AccountsService/users/root <<'EOF'
+[User]
+SystemAccount=true
+EOF
+
+    install -d /etc/gdm
+    cat > /etc/gdm/custom.conf <<'EOF'
+# GDM configuration storage
+
+[daemon]
+InitialSetupEnable=True
+#WaylandEnable=false
+
+[security]
+
+[xdmcp]
+
+[chooser]
+
+[debug]
+#Enable=true
+EOF
+    rm -f /etc/gdm/custom.conf.d/10-firstboot-autologin.conf
+    rm -f /root/.config/autostart/pipa-firstboot-setup.desktop
+    rm -f /usr/local/bin/pipa-firstboot-setup
+    rm -f /var/lib/pipa-firstboot/needs-setup /etc/pipa-firstboot-dm
+
+    # Taidan is Ultramarine's Qt first-boot installer; GNOME should use GIS instead.
+    systemctl disable --now taidan.service 2>/dev/null || true
+    systemctl mask taidan.service 2>/dev/null || true
+
+    echo 'root:root' | chpasswd
+    install -d /etc/sudoers.d
+    cat > /etc/sudoers.d/wheel <<'EOF'
+%wheel ALL=(ALL) ALL
+EOF
+    chmod 440 /etc/sudoers.d/wheel
+}
+
+# GNOME: native gnome-initial-setup via GDM (same as openSUSE-pipa).
+# Plasma: custom create-user dialog via root autologin.
+if [ "$FIRSTBOOT_DM" = gdm ]; then
+    enable_gnome_initial_setup
+    exit 0
+fi
+
 install -Dm755 /dev/stdin /usr/local/bin/pipa-firstboot-setup <<'SETUP_EOF'
 #!/bin/sh
 set -eu

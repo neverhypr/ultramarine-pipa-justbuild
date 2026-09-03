@@ -52,4 +52,29 @@ assert_firmware /usr/lib/firmware/ath11k/QCA6390/hw2.0/m3.bin
 
 assert_file /etc/profile.d/90-pipa-gsk-renderer.sh
 
+if [ -f /etc/gdm/custom.conf ]; then
+    echo "Validating GNOME initial setup..."
+    rpm -q gnome-initial-setup &>/dev/null || {
+        echo "gnome-initial-setup is not installed" >&2
+        exit 1
+    }
+    grep -q '^InitialSetupEnable=True' /etc/gdm/custom.conf || {
+        echo "GDM InitialSetupEnable is not True" >&2
+        exit 1
+    }
+    if grep -q '^AutomaticLogin=root' /etc/gdm/custom.conf; then
+        echo "GDM still autologins as root instead of gnome-initial-setup" >&2
+        exit 1
+    fi
+    if [ -f /root/.config/autostart/pipa-firstboot-setup.desktop ] \
+        || [ -f /var/lib/pipa-firstboot/needs-setup ]; then
+        echo "pipa firstboot wizard is still installed for GNOME" >&2
+        exit 1
+    fi
+    if [ ! -x /usr/libexec/gnome-initial-setup ]; then
+        echo "gnome-initial-setup binary missing" >&2
+        exit 1
+    fi
+fi
+
 echo "Hardware validation passed."

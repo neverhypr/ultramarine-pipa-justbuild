@@ -91,6 +91,11 @@ cd output/ultramarine-pipa-gnome-*/
 | `ultramarine_boot.raw` | `cust` | /boot (kernel, initramfs, DTB, GRUB) |
 | `ultramarine_rootfs.raw` | `userdata` | Root filesystem |
 
+## First boot
+
+- **GNOME:** GDM runs `gnome-initial-setup` (create your user). Root password is `root` for SSH/recovery.
+- **Plasma:** root autologins once (`root` / `root`), shows a create-user dialog, then reboots to the normal login screen.
+
 ## OTA Updates
 
 On a running tablet, packages update directly from pipa-pkgs:

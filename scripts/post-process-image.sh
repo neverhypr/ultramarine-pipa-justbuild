@@ -26,16 +26,32 @@ if [ ! -f "$RAW_IMAGE" ]; then
     exit 1
 fi
 
+write_uefi_csv() {
+    python3 - "$1" "$2" "$3" "$4" <<'PY'
+import pathlib, sys
+csv_path, entry_image, title, description = sys.argv[1:5]
+text = f"{entry_image},{title},,{description}\r\n"
+pathlib.Path(csv_path).write_bytes(b"\xff\xfe" + text.encode("utf-16le"))
+PY
+}
+
 mkdir -p "$OUTPUT_DIR"
 MNT=$(mktemp -d)
 BOOT_MNT=$(mktemp -d)
 ESP_MNT=$(mktemp -d)
+GRUB_ROOT_MNT=""
 
 cleanup() {
     umount "$MNT/boot" 2>/dev/null || true
     umount "$MNT" 2>/dev/null || true
     umount "$BOOT_MNT" 2>/dev/null || true
     umount "$ESP_MNT" 2>/dev/null || true
+    if [ -n "${GRUB_ROOT_MNT}" ]; then
+        umount "$GRUB_ROOT_MNT/proc" 2>/dev/null || true
+        umount "$GRUB_ROOT_MNT/boot" 2>/dev/null || true
+        umount "$GRUB_ROOT_MNT" 2>/dev/null || true
+        rmdir "$GRUB_ROOT_MNT" 2>/dev/null || true
+    fi
     rmdir "$MNT" "$BOOT_MNT" "$ESP_MNT" 2>/dev/null || true
     losetup -j "$RAW_IMAGE" | cut -d: -f1 | xargs -r losetup -d 2>/dev/null || true
 }
@@ -132,19 +148,36 @@ cp "${dtb_files[@]}" "$BOOT_MNT/dtbs/qcom/"
 TARGET_KERNEL_CMDLINE="root=LABEL=$ROOTFS_LABEL rw rootwait boot=LABEL=$BOOT_LABEL console=tty0 quiet splash clk_ignore_unused pd_ignore_unused"
 printf '%s\n' "$TARGET_KERNEL_CMDLINE" > "$BOOT_MNT/cmdline.txt"
 
-kernel_rel="Image"
-[ -f "$BOOT_MNT/Image" ] || kernel_rel="Image.gz"
-
-dtb_rels=()
-for dtb in "${dtb_files[@]}"; do
-    dtb_rels+=("dtbs/qcom/$(basename "$dtb")")
-done
-
-"$REPO_ROOT/scripts/write-pipa-grub-cfg.sh" \
-    "$BOOT_MNT/grub2/grub.cfg" "$BOOT_LABEL" "$TARGET_KERNEL_CMDLINE" \
-    "$kernel_rel" "$INITRAMFS_STABLE" "${dtb_rels[@]}"
-
 umount "$BOOT_MNT"
+
+echo "=== Generating GRUB config (pipa-refresh-grub-config) ==="
+GRUB_ROOT_MNT=$(mktemp -d)
+mount -o loop "$OUTPUT_DIR/ultramarine_rootfs.raw" "$GRUB_ROOT_MNT"
+mkdir -p "$GRUB_ROOT_MNT/boot" "$GRUB_ROOT_MNT/proc"
+printf '%s\n' "$TARGET_KERNEL_CMDLINE" > "$GRUB_ROOT_MNT/etc/cmdline"
+mount -o loop "$OUTPUT_DIR/ultramarine_boot.raw" "$GRUB_ROOT_MNT/boot"
+mount -t proc proc "$GRUB_ROOT_MNT/proc"
+if [ ! -x "$GRUB_ROOT_MNT/usr/local/bin/pipa-refresh-grub-config" ]; then
+    echo "ERROR: pipa-refresh-grub-config missing from rootfs" >&2
+    exit 1
+fi
+PIPA_INITRAMFS_SOURCE="/boot/initramfs-$KERNEL_VER.img" \
+    chroot "$GRUB_ROOT_MNT" /usr/local/bin/pipa-refresh-grub-config
+if [ ! -f "$GRUB_ROOT_MNT/boot/grub2/grub.cfg" ]; then
+    echo "ERROR: pipa-grub-config did not generate /boot/grub2/grub.cfg" >&2
+    exit 1
+fi
+umount "$GRUB_ROOT_MNT/proc"
+umount "$GRUB_ROOT_MNT/boot"
+umount "$GRUB_ROOT_MNT"
+rmdir "$GRUB_ROOT_MNT"
+GRUB_ROOT_MNT=""
+
+BOOT_FS_UUID="$(blkid -s UUID -o value "$OUTPUT_DIR/ultramarine_boot.raw")"
+if [ -z "$BOOT_FS_UUID" ]; then
+    echo "ERROR: unable to read UUID from ultramarine_boot.raw" >&2
+    exit 1
+fi
 
 echo "=== Creating ESP image ==="
 truncate -s 128M "$OUTPUT_DIR/ultramarine_esp.raw"
@@ -208,9 +241,11 @@ fi
 boot
 ESPCFG
     cat > "$ESP_MNT/EFI/$shim_vendor/bootuuid.cfg" <<UUIDCFG
-set BOOT_UUID=""
+set BOOT_UUID="$BOOT_FS_UUID"
 UUIDCFG
 done
+write_uefi_csv "$ESP_MNT/EFI/fedora/BOOTAA64.CSV" "shimaa64.efi" "Ultramarine" "Ultramarine Pipa"
+write_uefi_csv "$ESP_MNT/EFI/BOOT/BOOTAA64.CSV" "BOOTAA64.EFI" "Ultramarine" "Ultramarine Pipa"
 
 umount "$ESP_MNT"
 umount "$MNT/boot"
